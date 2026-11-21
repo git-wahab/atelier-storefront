@@ -42,5 +42,9 @@ export function money(amount: number): string {
 }
 
 export function priceOf(slug: string): number {
-  return prices[slug] ?? 0;
+  // Guard with typeof, not `?? 0`: a plain object literal also answers for
+  // inherited keys ("constructor", "toString"), which would hand money() a
+  // function and throw on .toFixed.
+  const price = prices[slug];
+  return typeof price === "number" ? price : 0;
 }

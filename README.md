@@ -37,6 +37,27 @@ You need Node.js 18.17 or newer.
 
 Any text in `[BRACKETS]` is placeholder copy to replace.
 
+## Tests
+
+```bash
+npm test             # run once
+npm run test:watch   # re-run on change
+npm run test:coverage
+```
+
+Vitest with React Testing Library and jsdom; specs live in `tests/`, one file per
+module. They cover the cart logic and its `localStorage` fallbacks, the contact
+route's validation, every component's behaviour and accessible names, and the
+product, cart and help pages. There is no browser-level test yet: the add-to-cart
+journey across a reload, and the cross-tab sync, would suit Playwright.
+
+Two notes on what the suite deliberately pins:
+
+- `tests/products.test.ts` asserts that `otherProduct()` only ever returns the
+  first non-matching design. Adding a third product should make that test fail.
+- `tests/cart-view-shipping.test.tsx` stubs `shippingFlat` to a real rate, since
+  delivery is free in the shipped config and that branch would otherwise never run.
+
 ## Before launch
 
 - **Checkout:** `components/CartView.tsx` → `placeOrder`. It currently clears the cart and shows a
