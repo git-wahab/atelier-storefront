@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-bone font-sans text-ink antialiased;
+    overflow-x: clip;
+  }
+  :focus-visible {
+    outline: 2px solid theme("colors.bronze");
+    outline-offset: 3px;
+  }
+  .dark-band :focus-visible {
+    outline-color: theme("colors.bone");
+  }
+}
+
+@layer components {
+  /* Side gutter used by every section */
+  .gut {
+    padding-left: clamp(20px, 5vw, 72px);
+    padding-right: clamp(20px, 5vw, 72px);
+  }
+  .display {
+    @apply m-0 font-serif font-normal tracking-[-0.01em];
+    text-wrap: balance;
+  }
+  .display em {
+    @apply italic text-bronze;
+  }
+  .cap {
+    @apply text-[11px] font-medium uppercase tracking-cap text-muted;
+  }
+  .copy {
+    @apply m-0 text-base leading-[1.75] text-body;
+  }
+  .h-section {
+    @apply display leading-[0.98];
+    font-size: clamp(44px, 5.6vw, 84px);
+  }
+  .h-side {
+    @apply display leading-none;
+    font-size: clamp(40px, 4.6vw, 68px);
+  }
+
+  .btn {
+    @apply inline-flex min-h-[52px] cursor-pointer items-center justify-center border border-ink px-8 text-xs font-medium uppercase tracking-btn no-underline transition-colors duration-300;
+  }
+  .btn-ink {
+    @apply btn bg-ink text-bone hover:bg-transparent hover:text-ink;
+  }
+  .btn-out {
+    @apply btn bg-transparent text-ink hover:bg-ink hover:text-bone;
+  }
+  .btn-bone {
+    @apply btn border-bone bg-bone text-ink hover:bg-transparent hover:text-bone;
+  }
+  .tlink {
+    @apply cursor-pointer border-b border-ink pb-1 text-xs font-medium uppercase tracking-btn text-ink no-underline transition-colors hover:border-bronze hover:text-bronze;
+  }
+  .nav {
+    @apply text-xs font-medium uppercase tracking-btn text-ink no-underline transition-colors hover:text-bronze;
+  }
+  .flink {
+    @apply text-sm text-dark-soft no-underline transition-colors hover:text-bone;
+  }
+
+  /* Dark plate behind a photograph, with a slow zoom on hover */
+  .frame {
+    @apply relative overflow-hidden bg-plate;
+  }
+  .frame img {
+    @apply block h-full w-full object-cover;
+    transition: transform 1.4s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  .hoverable:hover .frame img {
+    transform: scale(1.04);
+  }
+
+  .field {
+    @apply min-h-[52px] w-full rounded-none border border-ink/30 bg-paper px-4 py-3.5 font-sans text-[15px] text-ink placeholder:text-[#8A8A90] focus:border-ink focus:outline-none;
+  }
+  .field-dark {
+    @apply min-h-[52px] w-full rounded-none border border-bone/40 bg-transparent px-4 py-3.5 font-sans text-[15px] text-bone placeholder:text-dark-dim focus:border-bone focus:outline-none;
+  }
+}
+
+/* Scroll-linked motion. Browsers without scroll timelines show everything as-is. */
+@supports (animation-timeline: view()) {
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(28px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes plateIn {
+    from { clip-path: inset(0 0 14% 0); transform: translateY(24px); }
+    to { clip-path: inset(0 0 0 0); transform: translateY(0); }
+  }
+  @keyframes drift {
+    from { transform: translateY(40px); }
+    to { transform: translateY(-40px); }
+  }
+  .rise {
+    animation: fadeUp linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 45%;
+  }
+  .plate-in {
+    animation: plateIn linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 60%;
+  }
+  .drift {
+    animation: drift linear both;
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .rise, .plate-in, .drift { animation: none !important; }
+  .frame img { transition: none; }
+}
