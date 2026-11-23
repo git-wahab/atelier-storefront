@@ -46,9 +46,9 @@ describe("SiteFooter", () => {
     expect(screen.getByText("[PRIVACY] · [TERMS]")).toBeInTheDocument();
   });
 
-  it("uses the dark logo tone against the ink band", () => {
+  it("uses the bone wordmark against the ink band", () => {
     render(<SiteFooter />);
-    expect(screen.getByText("Your logo").className).toContain("text-dark-soft");
+    expect(screen.getByAltText(brandName).getAttribute("src")).toContain("logo-wordmark-bone");
   });
 
   it("groups the links under Shop, Help and Follow", () => {

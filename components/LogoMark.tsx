@@ -1,17 +1,25 @@
+import Image from "next/image";
+import { brandName } from "@/lib/config";
+
 /**
- * Placeholder for the brand logo. Replace the text with your logo file, e.g.
- * <Image src="/logo.svg" alt="Brand name" width={132} height={44} />
+ * The brand wordmark, from the supplied artwork.
+ *
+ * The mark is a bitmap, not type, so it cannot take a CSS colour: there is one
+ * file per ground, each carrying the theme's own ink (#111113) or bone
+ * (#F2F1EE). The M of the lockup is not here — it carries the site icon, where
+ * a wordmark this wide cannot read.
+ *
+ * Widths stand on the 11px rhythm the rest of the header chrome uses.
  */
 export default function LogoMark({ tone = "light" }: { tone?: "light" | "dark" }) {
-  const cls =
-    tone === "light"
-      ? "border-ink/45 text-body"
-      : "border-bone/45 text-dark-soft";
   return (
-    <span
-      className={`flex h-11 min-w-[132px] items-center justify-center border border-dashed px-4 text-[11px] uppercase tracking-cap ${cls}`}
-    >
-      Your logo
-    </span>
+    <Image
+      className="h-auto w-[176px] md:w-[198px]"
+      src={tone === "light" ? "/images/logo-wordmark-ink.png" : "/images/logo-wordmark-bone.png"}
+      alt={brandName}
+      width={1370}
+      height={100}
+      sizes="198px"
+    />
   );
 }
