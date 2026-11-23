@@ -4,6 +4,7 @@ import Photo from "@/components/Photo";
 import Heading from "@/components/Heading";
 import FactsStrip, { type Fact } from "@/components/FactsStrip";
 import LogoMark from "@/components/LogoMark";
+import { brandName } from "@/lib/config";
 
 describe("Photo", () => {
   it("renders the image with its alt text", () => {
@@ -153,18 +154,18 @@ describe("FactsStrip", () => {
 });
 
 describe("LogoMark", () => {
-  it("shows the placeholder text", () => {
+  it("shows the wordmark, named for the brand", () => {
     render(<LogoMark />);
-    expect(screen.getByText("Your logo")).toBeInTheDocument();
+    expect(screen.getByAltText(brandName)).toBeInTheDocument();
   });
 
-  it("uses ink tones on light backgrounds by default", () => {
+  it("uses the ink wordmark on light backgrounds by default", () => {
     render(<LogoMark />);
-    expect(screen.getByText("Your logo").className).toContain("text-body");
+    expect(screen.getByAltText(brandName).getAttribute("src")).toContain("logo-wordmark-ink");
   });
 
-  it("uses bone tones when placed on the dark band", () => {
+  it("uses the bone wordmark when placed on the dark band", () => {
     render(<LogoMark tone="dark" />);
-    expect(screen.getByText("Your logo").className).toContain("text-dark-soft");
+    expect(screen.getByAltText(brandName).getAttribute("src")).toContain("logo-wordmark-bone");
   });
 });

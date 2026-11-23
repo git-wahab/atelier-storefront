@@ -5,7 +5,7 @@
  * Replace them with your real prices, or load them from your store backend.
  * Text in [BRACKETS] anywhere in the project is placeholder copy.
  */
-export const brandName = "[Brand name]";
+export const brandName = "TIG Atelier";
 export const currency = "$";
 
 export const prices: Record<string, number> = {
