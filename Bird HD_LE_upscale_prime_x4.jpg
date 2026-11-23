@@ -1,0 +1,1218 @@
+# Storefront API Integration Guide
+
+Request and response for every endpoint the Next.js storefront calls.
+
+Nov 23, 2026 · @Abdul Wahab Shahid
+
+## Base URL and headers
+
+Every path in this document is relative to one root, read from the environment and never hardcoded. Variable names match the spec's environment table.
+
+```bash
+# .env.local
+API_BASE_URL=http://localhost:8000/api/v1   # server components and the write proxy
+STOREFRONT_API_SECRET=…                      # proxied writes only — never NEXT_PUBLIC_
+REVALIDATE_SECRET=…                          # the admin calls the storefront with this
+```
+
+| Environment | `API_BASE_URL` |
+| --- | --- |
+| Local | `http://localhost:8000/api/v1` |
+| Staging | `https://admin-staging.example.com/api/v1` |
+| Production | `https://admin.example.com/api/v1` |
+
+Staging must never point at the production root. A staging storefront quietly reading live products looks fine and is wrong for weeks.
+
+### Headers
+
+| Header | Reads | Writes |
+| --- | --- | --- |
+| `Accept: application/json` | yes | yes |
+| `Content-Type: application/json` | — | yes |
+| `X-Storefront-Secret` | — | yes, `STOREFRONT_API_SECRET` |
+| `X-Forwarded-For` | — | set by the proxy, so rate limits key on the visitor |
+
+Reads carry no credential, because they return only what is already public. Writes carry the shared secret, and that single fact decides the architecture: **a write can never be issued from a client component**, because the secret would have to reach the browser to do it. Writes go through a route handler instead — the request and response shapes below are what the route handler sends and receives, and your components talk to the route handler.
+
+There is no `NEXT_PUBLIC_` variable in the list above on purpose. If a client component ever needs the API root directly, add `NEXT_PUBLIC_API_BASE_URL` for that read only, and never put the secret behind that prefix: it is compiled into the bundle, which would undo the whole arrangement.
+
+## Conventions in every payload
+
+Six rules hold everywhere, so they are stated once rather than repeated per endpoint.
+
+**Everything is wrapped in `data`.** A successful response is `{ "data": … }` — an object for a single resource, an array for a list. Lists add `meta` and `links`. Nothing useful is ever at the top level, so `res.json()` is always followed by `.data`.
+
+**Money is an integer in minor units.** `price: 12000` means $120.00. Never `120`, never `"120.00"`. The storefront formats with `money()`, which keeps the existing `currency + amount.toFixed(2)` behaviour — so divide by 100 at the formatting boundary and nowhere else. Doing arithmetic on dollars reintroduces the float error the integer storage exists to prevent.
+
+**Keys are camelCase.** The database is snake\_case; the API converts. `name_lead` becomes `nameLead`, `motif_note` becomes `motifNote`. This is what lets the response drop into the existing `Product` type unchanged.
+
+**Omitted means absent, `null` means known-empty.** Optional fields that have no value are left out of the JSON rather than sent as `null`, because the storefront's components already have sensible fallbacks for `undefined` — `Photo` falls back to `50% 25%` for a missing focal position, for instance. A literal `null` appears only where the distinction matters, and each case is called out below.
+
+**Dates are ISO 8601 with a timezone.** `"2026-11-23T14:32:00+00:00"`. Parse with `new Date()`; format in the user's locale at render time, never on the server.
+
+**Lists are paginated, single resources are not.** Any array response carries `meta.page`, `meta.perPage`, `meta.total` and `meta.lastPage`. Treat a list endpoint as paginated even when you expect one page: the catalogue is designed to grow, and code that assumes one page is the bug this API shape exists to prevent.
+
+## Errors and status codes
+
+Every failure uses one envelope, so the storefront needs one parser rather than eleven.
+
+```json
+{
+  "message": "The given data was invalid.",
+  "errors": {
+    "email": ["Enter a valid email address."],
+    "lines.0.size": ["That size is no longer available."]
+  }
+}
+```
+
+`message` is always present and safe to show. `errors` appears only on `422`, keyed by the field path in the request body, with an array per field because one field can fail two rules at once. Dotted paths index into arrays — `lines.0.size` is the size of the first cart line — which is what lets you attach a message to the right row in the cart.
+
+| Status | When | What the storefront does |
+| --- | --- | --- |
+| `200` | Read succeeded | — |
+| `201` | Order, message or subscription created | Read `data`, clear the form |
+| `404` | Unknown slug, or an order lookup that did not match | `notFound()` on a page; an inline message on a lookup |
+| `409` | Stock conflict on `POST /orders` | Its own shape — see that endpoint |
+| `422` | Validation failed | Map `errors` onto the fields |
+| `429` | Rate limited | Show the `Retry-After` wait; keep the form filled |
+| `5xx` | Server or network failure | Generic message, keep the form filled, log it |
+
+Two rules about failure that matter more than the codes.
+
+**Never clear a form on anything but success.** A `429` or a `5xx` that wipes a filled-in address is the difference between a retry and a lost order. Clear on `201` only.
+
+**A failed read on a page is not the same as a failed write.** A product page whose fetch fails should throw and let the error boundary handle it, because rendering a page with no product is worse than rendering nothing. A failed write should stay on the page and explain itself, because the visitor still has their data and can try again.
+
+## TypeScript types
+
+This is the whole contract as types. Paste it into `lib/api-types.ts`; every endpoint below refers back to a name from here rather than respelling a shape.
+
+`ProductCard` and `Product` are deliberately separate, and `Product extends ProductCard` so anything that renders a card accepts a full product too — which is why `ProductCard` can be passed to the existing card components unchanged.
+
+```ts
+// ---- envelopes ----
+export type Envelope<T> = { data: T };
+export type Paginated<T> = {
+  data: T[];
+  meta: { page: number; perPage: number; total: number; lastPage: number };
+  links: { next?: string; prev?: string };
+};
+export type ApiError = { message: string; errors?: Record<string, string[]> };
+
+// ---- shared ----
+export type Img = { src: string; alt: string; width?: number; height?: number };
+export type Figure = Img & {
+  caption: string;
+  note: string;
+  ratio?: string;
+  position?: string;
+  plain?: boolean;
+};
+export type Variant = { size: string; inStock: boolean; price: number };
+
+// ---- products ----
+export type ProductCard = {
+  slug: string;
+  name: string;
+  nameLead: string;
+  nameTail?: string;
+  number: string;
+  fleece: string;
+  dot: string;
+  threads: string;
+  short: string;
+  motif: string;
+  motifNote: string;
+  price: number;          // minor units
+  currency: string;       // "USD"
+  isFeatured: boolean;
+  inStock: boolean;       // rolled up from variants
+  hoodie: Img;
+};
+
+export type Product = ProductCard & {
+  description: string;
+  story: string;
+  artHeading: [string, string];
+  closeHeading: [string, string];
+  pair: string;
+  sizes: string[];        // this product's sizes, in picker order
+  variants: Variant[];
+  gallery: Img[];
+  figures: Figure[];
+  collections: CollectionRef[];
+  related: ProductCard[];
+};
+
+// ---- collections ----
+export type CollectionRef = { slug: string; name: string };
+export type CollectionCard = CollectionRef & {
+  nameLead: string;
+  nameTail?: string;
+  short: string;
+  heroImage?: Img;
+  productCount: number;
+};
+export type CollectionDetail = CollectionCard & { description?: string };
+
+// ---- settings and faqs ----
+export type Settings = {
+  brandName: string;
+  currency: string;
+  currencySymbol: string;
+  shippingFlat: number;   // minor units
+  taxRateBp: number;      // basis points
+  sizes: string[];        // admin default + matrix order, NOT availability
+  notes: Record<
+    "shipping" | "returns" | "fabric" | "fit" | "care" | "sizeGuide" | "delivery" | "deliveryMethods",
+    string
+  >;
+  contact: Record<"email" | "instagram" | "otherSocial" | "hours" | "responseTime", string>;
+};
+export type Faq = { q: string; a: string };
+
+// ---- orders ----
+export type Address = {
+  name: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  postcode: string;
+  country: string;        // ISO 3166-1 alpha-2
+  phone?: string;
+};
+export type OrderLineInput = { slug: string; size: string; qty: number };
+
+export type CreateOrderRequest = {
+  email: string;
+  lines: OrderLineInput[];
+  shipping: Address;
+  billing?: Address;      // omitted means same as shipping
+  discountCode?: string;
+  note?: string;
+};
+
+export type OrderItem = {
+  name: string;
+  slug: string;
+  size: string;
+  qty: number;
+  unitPrice: number;
+  lineTotal: number;
+};
+export type Order = {
+  orderNumber: string;    // "AT-7K2M9Q"
+  status: "awaiting_payment" | "paid" | "shipped" | "cancelled" | "refunded";
+  email: string;
+  items: OrderItem[];
+  subtotal: number;
+  discount: number;
+  shippingTotal: number;
+  tax: number;
+  total: number;
+  currency: string;
+  shipping: Address;
+  billing: Address;
+  placedAt: string;       // ISO 8601
+};
+
+// ---- stock conflict (409) ----
+export type StockProblem = {
+  slug: string;
+  size: string;
+  reason: "unavailable" | "insufficient_stock";
+  available?: number;     // only on insufficient_stock
+};
+export type StockConflict = { message: string; problems: StockProblem[] };
+
+// ---- discounts ----
+export type DiscountResult =
+  | { valid: true; code: string; kind: "percent" | "fixed"; value: number; discount: number }
+  | { valid: false; code: string; reason: DiscountRejection };
+export type DiscountRejection =
+  | "not_found" | "expired" | "not_started"
+  | "exhausted" | "below_minimum" | "inactive";
+```
+
+Two notes on the types themselves. `artHeading` and `closeHeading` are two-element tuples rather than `string[]`, because the components destructure both halves and a one-element array would be a silent layout bug. And `DiscountResult` is a discriminated union on `valid`, so TypeScript forces you to handle the rejection branch before reading `discount`.
+
+## The fetch helper
+
+One helper in `lib/api.ts`, used by every read. It exists so that the base URL, the headers, the `data` unwrapping and the error shape are written once — and so that a `404` can be distinguished from a crash, which the pages need.
+
+```ts
+import type { ApiError, Envelope } from "./api-types";
+
+const BASE = process.env.API_BASE_URL;
+if (!BASE) throw new Error("API_BASE_URL is not set");
+
+/** Thrown for any non-2xx. `status` lets callers branch; `errors` carries 422 field messages. */
+export class ApiRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly errors?: Record<string, string[]>,
+    readonly body?: unknown,
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
+/** A 404 is an expected outcome, not a failure — callers map it to notFound(). */
+export class NotFoundError extends ApiRequestError {
+  constructor(message = "Not found") {
+    super(404, message);
+    this.name = "NotFoundError";
+  }
+}
+
+type GetOptions = { revalidate?: number; tags?: string[] };
+
+export async function apiGet<T>(path: string, opts: GetOptions = {}): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { Accept: "application/json" },
+    next: { revalidate: opts.revalidate ?? 300, tags: opts.tags },
+  });
+
+  if (res.status === 404) throw new NotFoundError();
+
+  if (!res.ok) {
+    // An error body is not guaranteed — a 502 from a proxy is often HTML.
+    const body = await res.json().catch(() => null);
+    const err = (body ?? {}) as ApiError;
+    throw new ApiRequestError(
+      res.status,
+      err.message ?? `Request to ${path} failed with ${res.status}`,
+      err.errors,
+      body,
+    );
+  }
+
+  const json = (await res.json()) as Envelope<T>;
+  return json.data;
+}
+
+/** Builds a query string, dropping undefined so callers can pass optionals directly. */
+export function qs(params: Record<string, string | number | undefined>): string {
+  const entries = Object.entries(params).filter(
+    ([, v]) => v !== undefined && v !== "",
+  ) as [string, string | number][];
+  if (!entries.length) return "";
+  return "?" + new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString();
+}
+```
+
+Three decisions in there worth keeping.
+
+**`404` gets its own error class.** Pages call `notFound()` on `NotFoundError` and let everything else reach the error boundary. Without the split, a page would either swallow real failures as "not found" or show a 500 for a deleted product.
+
+**The error body is parsed defensively.** A `502` from a reverse proxy is usually HTML, so `res.json()` would throw and mask the real status. The `.catch(() => null)` keeps the status visible.
+
+**The helper returns `data`, not the envelope.** Callers never write `.data`, which removes a whole class of typo. The one exception is a paginated list, where `meta` is needed — so those endpoints use a thin variant that returns the envelope whole:
+
+```ts
+export async function apiGetPage<T>(
+  path: string,
+  opts: GetOptions = {},
+): Promise<Paginated<T>> {
+  // Same as apiGet, but resolves to the full envelope rather than .data.
+  // Factor the shared body out in the real implementation.
+}
+```
+
+Writes do not use `apiGet`. They go through a route handler, which has its own helper — see the proxy section.
+
+## GET /products
+
+The catalogue, card-shaped and paginated. Returns `Paginated<ProductCard>`.
+
+**Request**
+
+```http
+GET /api/v1/products?page=1&per_page=24&sort=position
+Accept: application/json
+```
+
+| Parameter | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `page` | integer | `1` |  |
+| `per_page` | integer | `24` | Capped at 60; a larger value is clamped, not rejected |
+| `collection` | string | — | Collection slug; orders by the pivot's position |
+| `featured` | `1` | — | Only products with `isFeatured` |
+| `sort` | enum | `position` | `position`, `newest`, `price_asc`, `price_desc` |
+| `q` | string | — | Matches name, number, motif and threads |
+| `slugs` | string | — | Up to 50 comma-separated slugs; returns exactly those and ignores every other filter |
+
+**Response `200`**
+
+```json
+{
+  "data": [
+    {
+      "slug": "whispering-crane-bird",
+      "name": "Whispering Crane Bird",
+      "nameLead": "Whispering Crane",
+      "nameTail": "Bird",
+      "number": "01",
+      "fleece": "Ivory",
+      "dot": "#C98763",
+      "threads": "Blue, silver, copper-rose",
+      "short": "Two cranes in flight among cherry blossom.",
+      "motif": "Cranes and blossom",
+      "motifNote": "Two cranes, facing each other across the body.",
+      "price": 12000,
+      "currency": "USD",
+      "isFeatured": true,
+      "inStock": true,
+      "hoodie": {
+        "src": "https://cdn.example.com/products/crane-hoodie.jpg",
+        "alt": "Whispering Crane Bird hoodie in ivory with embroidered sleeves",
+        "width": 843,
+        "height": 1264
+      }
+    }
+  ],
+  "meta": { "page": 1, "perPage": 24, "total": 37, "lastPage": 2 },
+  "links": { "next": "https://admin.example.com/api/v1/products?page=2" }
+}
+```
+
+An empty catalogue returns `{ "data": [], "meta": { … "total": 0, "lastPage": 1 }, "links": {} }` with status `200`. A page past the end does the same. Neither is a `404`, so do not call `notFound()` on an empty list — render an empty state.
+
+**Errors** — `422` for a bad `sort` value or a non-numeric `page`. No `404`.
+
+**Where the storefront calls it**
+
+```ts
+// lib/products.ts
+export async function getProducts(params: {
+  page?: number; collection?: string; featured?: 1; sort?: string; q?: string;
+} = {}) {
+  return apiGetPage<ProductCard>(`/products${qs(params)}`, {
+    revalidate: 300,
+    tags: ["products"],
+  });
+}
+
+/** Resolves saved cart lines in one request. */
+export async function getProductsBySlugs(slugs: string[]) {
+  if (!slugs.length) return [];
+  const unique = [...new Set(slugs)].slice(0, 50);
+  const page = await apiGetPage<ProductCard>(
+    `/products${qs({ slugs: unique.join(",") })}`,
+    { revalidate: 60, tags: ["products"] },
+  );
+  return page.data;
+}
+```
+
+The `slugs` form is what the cart uses. Deduplicate before sending — a cart with three sizes of one design is three lines but one product — and expect fewer results than slugs, because a deleted product simply will not come back. That absence is how the cart knows to drop a line.
+
+The homepage uses `featured=1`, and `/products` uses `page`. Do not fetch the whole catalogue to filter in JavaScript; the parameters exist so the response stays small.
+
+## GET /products/{slug}
+
+One product in full. Returns `Envelope<Product>`. This is the only call the product page needs — related products and collection membership come back resolved.
+
+**Request**
+
+```http
+GET /api/v1/products/whispering-crane-bird
+Accept: application/json
+```
+
+No query parameters. The slug is the one the card returned; do not slugify a name yourself.
+
+**Response `200`** — every `ProductCard` field, plus:
+
+```json
+{
+  "data": {
+    "slug": "whispering-crane-bird",
+    "description": "Two cranes in flight, embroidered across both sleeves.",
+    "story": "A pair of cranes lifts through branches of cherry blossom.",
+    "artHeading": ["Two cranes,", "mirrored."],
+    "closeHeading": ["Every feather,", "in thread."],
+    "pair": "https://cdn.example.com/products/crane-pair.webp",
+    "sizes": ["XS", "S", "M", "L", "XL"],
+    "variants": [
+      { "size": "XS", "inStock": true,  "price": 12000 },
+      { "size": "S",  "inStock": true,  "price": 12000 },
+      { "size": "M",  "inStock": false, "price": 12000 },
+      { "size": "L",  "inStock": true,  "price": 12000 },
+      { "size": "XL", "inStock": true,  "price": 13000 }
+    ],
+    "gallery": [
+      { "src": "https://cdn.example.com/products/crane-hoodie.jpg", "alt": "The hoodie, front" },
+      { "src": "https://cdn.example.com/products/crane-sleeve-left.jpg", "alt": "Left sleeve embroidery" }
+    ],
+    "figures": [
+      {
+        "src": "https://cdn.example.com/products/crane-pair.webp",
+        "alt": "Artwork, both sleeves",
+        "caption": "1 · The artwork",
+        "note": "Both sleeves, drawn flat.",
+        "ratio": "3/4",
+        "plain": true
+      }
+    ],
+    "collections": [{ "slug": "winter-capsule", "name": "Winter Capsule" }],
+    "related": [
+      {
+        "slug": "midnight-bloom",
+        "name": "Midnight Bloom",
+        "nameLead": "Midnight",
+        "nameTail": "Bloom",
+        "short": "Peonies opening across the shoulders.",
+        "price": 12000,
+        "inStock": true,
+        "hoodie": { "src": "https://cdn.example.com/products/bloom-hoodie.jpg", "alt": "Midnight Bloom hoodie", "width": 843, "height": 1264 }
+      }
+    ]
+  }
+}
+```
+
+Note the `XL` variant at `13000`. A variant price overrides the product's, so **read the price from the selected variant, not from `product.price`**. `product.price` is the "from" price for cards; using it in the buy panel will undercharge on an overridden size.
+
+`related` may be empty. The server falls back to other products in the same collection, then to the newest active ones, so an empty array means the catalogue genuinely has nothing else to show — hide the section rather than rendering an empty heading.
+
+**Errors**
+
+| Status | Meaning |
+| --- | --- |
+| `404` | Unknown, inactive or unpublished slug |
+
+That is the whole error list, and the `404` is deliberately indistinguishable between "never existed" and "unpublished" — an unreleased design should not be discoverable by probing slugs.
+
+**Where the storefront calls it**
+
+```ts
+// app/products/[slug]/page.tsx
+import { notFound } from "next/navigation";
+import { NotFoundError } from "@/lib/api";
+
+export async function generateStaticParams() {
+  const page = await apiGetPage<ProductCard>("/products?per_page=60");
+  return page.data.map((p) => ({ slug: p.slug }));
+}
+
+export default async function ProductPage({ params }: { params: { slug: string } }) {
+  let product: Product;
+  try {
+    product = await apiGet<Product>(`/products/${params.slug}`, {
+      revalidate: 300,
+      tags: ["products", `product:${params.slug}`],
+    });
+  } catch (e) {
+    if (e instanceof NotFoundError) notFound();
+    throw e;                      // a real failure belongs to the error boundary
+  }
+  // …render
+}
+```
+
+`generateStaticParams` takes one page at `per_page=60`. That is fine for dozens of products and silently wrong for hundreds — past that, page through the list or switch to `dynamicParams: true` and return only the featured slugs. The per-product cache tag is what the admin's revalidation call targets after a save.
+
+## GET /collections
+
+The collection index. Returns `Envelope<CollectionCard[]>` — not paginated, because the list is short enough to be a navigation menu.
+
+**Request**
+
+```http
+GET /api/v1/collections
+Accept: application/json
+```
+
+**Response `200`**
+
+```json
+{
+  "data": [
+    {
+      "slug": "winter-capsule",
+      "name": "Winter Capsule",
+      "nameLead": "Winter",
+      "nameTail": "Capsule",
+      "short": "Six designs in a heavier fleece.",
+      "heroImage": {
+        "src": "https://cdn.example.com/collections/winter-hero.jpg",
+        "alt": "Three hoodies on a rail",
+        "width": 1600,
+        "height": 900
+      },
+      "productCount": 6
+    }
+  ]
+}
+```
+
+No member products: the nav and the index need a name, a link and a count. `heroImage` is omitted when the collection has none, and the storefront should fall back to the first member product's hoodie shot rather than leaving a gap.
+
+**Errors** — none beyond `5xx`. An empty array is a valid answer and means collections are not in use yet, which is the expected state at launch. `SiteHeader` should render no collection links at all rather than an empty dropdown.
+
+```ts
+export async function getCollections() {
+  return apiGet<CollectionCard[]>("/collections", {
+    revalidate: 900,
+    tags: ["collections"],
+  });
+}
+```
+
+Cached for 900 seconds rather than 300: collections change far less often than prices or stock.
+
+## GET /collections/{slug}
+
+One collection's copy plus its products. The response is a hybrid: the collection in `data`, its products in `products` with their own pagination.
+
+**Request**
+
+```http
+GET /api/v1/collections/winter-capsule?page=1&per_page=24
+Accept: application/json
+```
+
+| Parameter | Default | Notes |
+| --- | --- | --- |
+| `page` | `1` | Applies to the products, not the collection |
+| `per_page` | `24` | Capped at 60 |
+
+**Response `200`**
+
+```json
+{
+  "data": {
+    "slug": "winter-capsule",
+    "name": "Winter Capsule",
+    "nameLead": "Winter",
+    "nameTail": "Capsule",
+    "short": "Six designs in a heavier fleece.",
+    "description": "Cut from a 480gsm loopback, the winter pieces carry the same sleeve work.",
+    "heroImage": { "src": "https://cdn.example.com/collections/winter-hero.jpg", "alt": "Three hoodies on a rail", "width": 1600, "height": 900 },
+    "productCount": 6
+  },
+  "products": {
+    "data": [ "… ProductCard objects, in pivot order …" ],
+    "meta": { "page": 1, "perPage": 24, "total": 6, "lastPage": 1 },
+    "links": {}
+  }
+}
+```
+
+The nesting is the one place this API departs from "everything in `data`", and it earns it: a collection page needs the heading copy and the grid together, and splitting them into two calls would make the page wait twice. Type it explicitly:
+
+```ts
+export type CollectionPage = {
+  data: CollectionDetail;
+  products: Paginated<ProductCard>;
+};
+
+export async function getCollection(slug: string, page = 1) {
+  const res = await fetch(`${BASE}/collections/${slug}${qs({ page })}`, {
+    headers: { Accept: "application/json" },
+    next: { revalidate: 300, tags: ["collections", `collection:${slug}`] },
+  });
+  if (res.status === 404) throw new NotFoundError();
+  if (!res.ok) throw new ApiRequestError(res.status, "Collection fetch failed");
+  return (await res.json()) as CollectionPage;   // not apiGet: two top-level keys
+}
+```
+
+**Errors** — `404` for an unknown, inactive or unpublished slug; `notFound()` as with a product. A collection that exists but has no products returns `200` with an empty `products.data`, which is an empty state, not an error.
+
+This endpoint is equivalent to `GET /products?collection={slug}` with the heading copy attached. Use that simpler form when you only need the grid — a filter chip on `/products`, say — and this one for the collection's own page.
+
+## GET /settings
+
+Everything `lib/config.ts` currently exports as constants. Returns `Envelope<Settings>`.
+
+**Request**
+
+```http
+GET /api/v1/settings
+Accept: application/json
+```
+
+**Response `200`**
+
+```json
+{
+  "data": {
+    "brandName": "Atelier",
+    "currency": "USD",
+    "currencySymbol": "$",
+    "shippingFlat": 0,
+    "taxRateBp": 0,
+    "sizes": ["XS", "S", "M", "L", "XL"],
+    "notes": {
+      "shipping": "Free delivery on all orders.",
+      "returns": "30-day returns.",
+      "fabric": "380gsm cotton-blend fleece.",
+      "fit": "Relaxed; size down for a closer fit.",
+      "care": "Wash cold, inside out.",
+      "sizeGuide": "Chest measurements in centimetres.",
+      "delivery": "Two to four working days.",
+      "deliveryMethods": "Tracked standard, or express on request."
+    },
+    "contact": {
+      "email": "hello@example.com",
+      "instagram": "@atelier",
+      "otherSocial": "…",
+      "hours": "Mon–Fri, 9–5",
+      "responseTime": "We reply within one working day."
+    }
+  }
+}
+```
+
+Only keys in the public groups are serialised; admin-only settings never appear here, so you cannot leak one by rendering the whole object.
+
+**The one trap: do not use `sizes` for availability.**
+
+`sizes` is the union of active variant sizes across the whole catalogue. It was unambiguous when every design ran XS–XL, and it stops meaning anything once the catalogue is mixed — a picker built from it will offer sizes the product on screen does not come in.
+
+| Use it for | Read instead |
+| --- | --- |
+| The size-guide table's column order | — |
+| A size filter on `/products` | — |
+| The picker on a product page | `product.sizes` |
+| Whether a size is buyable | `product.variants[].inStock` |
+
+`shippingFlat` and `taxRateBp` are both minor units and basis points respectively, and both are `0` in the shipped config. `shippingFlat: 0` means free delivery, not "unknown" — render "Free" rather than `$0.00`. The cart's existing `shippingFlat` stub has exactly one test pinning a non-zero rate, which is the test to run after wiring this up.
+
+```ts
+export async function getSettings() {
+  return apiGet<Settings>("/settings", { revalidate: 900, tags: ["settings"] });
+}
+```
+
+## GET /faqs
+
+Active FAQ entries in display order. Returns `Envelope<Faq[]>`.
+
+**Request**
+
+```http
+GET /api/v1/faqs
+Accept: application/json
+```
+
+**Response `200`**
+
+```json
+{
+  "data": [
+    {
+      "q": "Where is the embroidery on the hoodie?",
+      "a": "On both sleeves, from the shoulder down to the cuff. The body is left plain so the design stands out."
+    },
+    {
+      "q": "How do I choose my size?",
+      "a": "Chest measurements are in the size guide. The fit is relaxed."
+    }
+  ]
+}
+```
+
+Two fields, `q` and `a`, matching the existing `Faq` type exactly. No ids, no categories, no HTML — the answers are plain text and `FaqList` renders them as it already does.
+
+**Errors** — none beyond `5xx`. An empty array hides the FAQ section.
+
+```ts
+export async function getFaqs() {
+  return apiGet<Faq[]>("/faqs", { revalidate: 900, tags: ["faqs"] });
+}
+```
+
+This is the easiest endpoint to wire up and the one to do first. `lib/faq.ts` exports a type and an array; replacing the array with this call touches one file, and `FaqList` already takes its items as props, so no component changes. It is the smallest possible end-to-end test of the base URL, the helper, the cache window and the revalidation hook — get this working and the remaining ten are variations on a solved problem.
+
+## POST /orders
+
+Places an order. No authentication, no account — the email on the body is the customer's only identity. This is the most important endpoint to get right, because it is the only one that moves stock.
+
+**Request**
+
+```http
+POST /api/v1/orders
+Content-Type: application/json
+Accept: application/json
+X-Storefront-Secret: …
+```
+
+```json
+{
+  "email": "buyer@example.com",
+  "lines": [
+    { "slug": "whispering-crane-bird", "size": "M", "qty": 1 },
+    { "slug": "midnight-bloom", "size": "L", "qty": 2 }
+  ],
+  "shipping": {
+    "name": "A. Buyer",
+    "line1": "12 Example Street",
+    "line2": "Flat 3",
+    "city": "Manchester",
+    "postcode": "M1 2AB",
+    "country": "GB",
+    "phone": "+44 7700 900000"
+  },
+  "discountCode": "WINTER10",
+  "note": "Please leave with the neighbour."
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `email` | yes | The order's identity; needed again for lookup |
+| `lines` | yes | At least one; `{ slug, size, qty }`, exactly the cart's stored shape |
+| `lines[].qty` | yes | Integer, 1 to 10 |
+| `shipping` | yes | Full address; snapshotted onto the order |
+| `billing` | no | Omit to mean "same as shipping" |
+| `discountCode` | no | Validated again server-side; never trust the client's total |
+| `note` | no | Up to 500 characters |
+
+**The client sends no prices.** Not the line price, not the subtotal, not the total. The server recalculates everything from its own data and returns the authoritative figures. Anything the cart displayed was a preview. This is what stops a crafted request buying a hoodie for a penny, and it is why the response is worth reading rather than discarding.
+
+**Response `201`**
+
+```json
+{
+  "data": {
+    "orderNumber": "AT-7K2M9Q",
+    "status": "awaiting_payment",
+    "email": "buyer@example.com",
+    "items": [
+      { "name": "Whispering Crane Bird", "slug": "whispering-crane-bird", "size": "M", "qty": 1, "unitPrice": 12000, "lineTotal": 12000 },
+      { "name": "Midnight Bloom", "slug": "midnight-bloom", "size": "L", "qty": 2, "unitPrice": 12000, "lineTotal": 24000 }
+    ],
+    "subtotal": 36000,
+    "discount": 3600,
+    "shippingTotal": 0,
+    "tax": 0,
+    "total": 32400,
+    "currency": "USD",
+    "shipping": { "name": "A. Buyer", "line1": "12 Example Street", "line2": "Flat 3", "city": "Manchester", "postcode": "M1 2AB", "country": "GB" },
+    "billing": { "name": "A. Buyer", "line1": "12 Example Street", "line2": "Flat 3", "city": "Manchester", "postcode": "M1 2AB", "country": "GB" },
+    "placedAt": "2026-11-23T14:32:00+00:00"
+  }
+}
+```
+
+Show `orderNumber` on the confirmation and tell the visitor to keep it — with no account, that string plus their email is the only way back to the order. `items` carries the names as snapshotted, so render the confirmation from the response rather than from the cart you are about to clear.
+
+**Response `409` — the stock conflict**
+
+This is the one error shape unique to this endpoint, and the one most likely to be skipped and then hit in production.
+
+```json
+{
+  "message": "Some items are no longer available.",
+  "problems": [
+    { "slug": "whispering-crane-bird", "size": "M", "reason": "insufficient_stock", "available": 1 },
+    { "slug": "midnight-bloom", "size": "L", "reason": "unavailable" }
+  ]
+}
+```
+
+`available` appears only on `insufficient_stock`, and only when some stock remains. `unavailable` means the product or size is gone entirely. Nothing was written — the whole order is one transaction, so a `409` means no stock moved and no order exists.
+
+Handle it by annotating the cart rather than failing the page: cap the quantity on an `insufficient_stock` line, drop an `unavailable` one, say what changed, and leave the visitor on the cart with a working button. Clearing the cart on a `409` is the worst possible response, because the order did not happen and their basket was recoverable.
+
+**Other errors**
+
+| Status | Meaning |
+| --- | --- |
+| `422` | Validation failed; `errors` keyed by `email`, `lines.0.size`, `shipping.postcode`, and so on |
+| `429` | Rate limited. Keep the form; show `Retry-After` |
+| `5xx` | Unknown. **Do not retry automatically** — a retry can double an order |
+
+That last row matters. The write is not idempotent: there is no idempotency key in this version, so an automatic retry after a timeout risks two orders and two stock decrements. On a `5xx` or a network timeout, tell the visitor the order may not have gone through and give them the lookup endpoint to check, rather than resubmitting for them.
+
+## POST /orders/lookup
+
+The replacement for order history. A visitor with no account finds their order with its number plus the email it was placed under.
+
+It is a `POST` despite being a read, for one reason: a `GET` would put the email in the URL, where it lands in server logs, browser history and any analytics on the page. The guest-only design makes that email the customer's identity, so it stays in a body.
+
+**Request**
+
+```http
+POST /api/v1/orders/lookup
+Content-Type: application/json
+X-Storefront-Secret: …
+```
+
+```json
+{ "orderNumber": "AT-7K2M9Q", "email": "buyer@example.com" }
+```
+
+Both required. The order number is matched case-insensitively and with whitespace trimmed, because people retype it from an email — but the email must match the one on the order exactly, apart from case.
+
+**Response `200`** — the same `Order` shape as `POST /orders` returns.
+
+**Response `404`**
+
+```json
+{ "message": "No order matches that number and email." }
+```
+
+One message for every failure: wrong number, wrong email, right number with the wrong email, order deleted. Do not try to be more helpful in the UI than the API is here. "That order number exists but the email is wrong" would confirm an order number to someone who guessed it, which is exactly what the unguessable `AT-` + six-character format exists to prevent.
+
+**Response `429`** — this endpoint is rate limited harder than the others, because it is the one an attacker would enumerate. Expect a low per-IP ceiling; show the wait and do not retry in a loop.
+
+```ts
+// app/api/orders/lookup/route.ts — via the proxy, like every write
+const order = await proxyPost<Order>("/orders/lookup", { orderNumber, email });
+```
+
+Never cache this response. It is per-visitor and contains an address; `no-store` on the route handler, and no `revalidate`.
+
+## POST /discounts/validate
+
+Checks a code and returns what it would be worth, without consuming it. Use it to give feedback in the cart before checkout.
+
+**Request**
+
+```http
+POST /api/v1/discounts/validate
+Content-Type: application/json
+X-Storefront-Secret: …
+```
+
+```json
+{
+  "code": "WINTER10",
+  "lines": [{ "slug": "whispering-crane-bird", "size": "M", "qty": 1 }]
+}
+```
+
+`lines` is needed because a code can carry a minimum spend, so the answer depends on the cart. Send the cart as it stands.
+
+**Response `200`, valid**
+
+```json
+{
+  "data": {
+    "valid": true,
+    "code": "WINTER10",
+    "kind": "percent",
+    "value": 10,
+    "discount": 1200
+  }
+}
+```
+
+`value` is the code's own setting — `10` for 10%, or minor units for a fixed amount. `discount` is what it is worth against this cart, always in minor units. Display `discount`; `kind` and `value` are for the label ("10% off").
+
+**Response `200`, rejected**
+
+```json
+{ "data": { "valid": false, "code": "WINTER10", "reason": "below_minimum" } }
+```
+
+A rejected code is still a `200`. The request succeeded; the answer is no. Reserve `422` for a malformed body.
+
+| `reason` | Suggested message |
+| --- | --- |
+| `not_found` | That code isn't recognised. |
+| `expired` | That code has expired. |
+| `not_started` | That code isn't active yet. |
+| `exhausted` | That code has been fully redeemed. |
+| `below_minimum` | Your order doesn't meet this code's minimum. |
+| `inactive` | That code is no longer available. |
+
+The messages are the storefront's to write, which is why they are suggestions rather than API strings — the API returns a machine reason so the copy can change without a deploy on both sides.
+
+**Validation here is advisory.** `POST /orders` validates the code again inside the same transaction that decrements stock, and increments its redemption count there with the row locked. So a code can pass this check and still be rejected at checkout, if its last use was claimed in between. Treat a `422` on `discountCode` at order time as the authoritative answer and re-render the total from the order response.
+
+## POST /contact
+
+The help page's contact form. This one already has a route handler — `app/api/contact/route.ts` — which keeps its validation and forwards instead of logging.
+
+**Request**
+
+```http
+POST /api/v1/contact
+Content-Type: application/json
+X-Storefront-Secret: …
+```
+
+```json
+{
+  "name": "A. Buyer",
+  "email": "buyer@example.com",
+  "topic": "order",
+  "order": "AT-7K2M9Q",
+  "message": "When will my order ship?"
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `name` | yes | 1 to 160 characters after trimming |
+| `email` | yes | Properly validated server-side |
+| `message` | yes | 1 to 5000 characters after trimming |
+| `topic` | no | Free text; the form offers a fixed set |
+| `order` | no | An order number, if the enquiry is about one |
+
+**Response `201`**
+
+```json
+{ "data": { "ok": true } }
+```
+
+Deliberately minimal — nothing to render but a thank-you. The existing route handler returns `{ ok: true }` without the envelope; keep that shape on the handler's own response so the component and its sixteen tests do not change, and unwrap the API's envelope inside the handler.
+
+**Errors** — `422` with `errors` keyed by field, `429` on rate limit.
+
+**A note on the existing validation.** The route handler checks `email.includes("@")`, which accepts `a@b`. That is fine as a cheap first filter and it is already covered by tests, so leave it; the server does the real validation and will return `422` for anything it rejects. Make sure the handler surfaces that `422` rather than swallowing it — the current implementation returns its own `400` before any forwarding, and after wiring up the API both paths need to reach the form.
+
+The handler already rejects a JSON body that is `null`, a bare number or a bare string, which is worth keeping: those are valid JSON and carry no fields.
+
+## POST /newsletter
+
+Adds an email to the mailing list.
+
+**Request**
+
+```http
+POST /api/v1/newsletter
+Content-Type: application/json
+X-Storefront-Secret: …
+```
+
+```json
+{ "email": "buyer@example.com", "source": "homepage" }
+```
+
+`email` is required. `source` is optional and records where the signup came from — `homepage`, `footer`, `help` — which is worth sending from the start, since it cannot be reconstructed later.
+
+**Response `201`**
+
+```json
+{ "data": { "ok": true } }
+```
+
+**An email already on the list also returns `201`.** This is intentional. A distinct "already subscribed" response would let anyone test whether an address is on the list, and the visitor does not benefit from knowing either way — they wanted to be subscribed, and they are. Render the same thank-you.
+
+Re-subscribing after an unsubscribe reactivates the existing row rather than creating a second one, so the storefront needs no special handling for it.
+
+**Errors** — `422` for a malformed address, `429` on rate limit. Both keep the field filled so the visitor can correct it.
+
+```ts
+// components/Newsletter.tsx → onSubmit, via a route handler
+const res = await fetch("/api/newsletter", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email, source: "footer" }),
+});
+if (res.ok) setDone(true);
+else setError((await res.json().catch(() => null))?.message ?? "Something went wrong.");
+```
+
+## Writes go through a route handler
+
+Every `POST` above is issued by a Next.js route handler, never by a client component. Reads go straight from server components to Laravel.
+
+The reason is one line of the headers table: writes carry `X-Storefront-Secret`. For a client component to send it, the secret would have to be in the browser bundle, which would make it not a secret. So the browser posts to the storefront's own origin, and the storefront's server forwards the request.
+
+|  | Reads | Writes |
+| --- | --- | --- |
+| Called from | Server components, directly | A route handler |
+| Carries the secret | No | Yes |
+| CORS applies | Yes, allowlisted | No — same origin |
+| Cached | Yes, per the windows below | Never |
+
+Three things the proxy buys that a direct call cannot: the secret stays on the server; CORS stops mattering for writes, because the only browser-facing origin is the storefront's own; and the visitor's real IP is forwarded deliberately, so rate limiting keys on the person rather than on one server address.
+
+The cost is an extra hop and a second place request shapes are declared. That cost is not worth paying for reads — they are public, cacheable, and a proxy would only add latency.
+
+**One shared helper**
+
+```ts
+// lib/api-write.ts — server-only
+import "server-only";
+import { headers } from "next/headers";
+
+const BASE = process.env.API_BASE_URL;
+const SECRET = process.env.STOREFRONT_API_SECRET;
+
+export type ProxyResult<T> =
+  | { ok: true; status: number; data: T }
+  | { ok: false; status: number; body: unknown };
+
+export async function proxyPost<T>(path: string, body: unknown): Promise<ProxyResult<T>> {
+  if (!SECRET) throw new Error("STOREFRONT_API_SECRET is not set");
+
+  const forwarded = headers();
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-Storefront-Secret": SECRET,
+      // Laravel trusts this header only from the proxy's address.
+      "X-Forwarded-For":
+        forwarded.get("x-forwarded-for") ?? forwarded.get("x-real-ip") ?? "",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const parsed = await res.json().catch(() => null);
+  if (!res.ok) return { ok: false, status: res.status, body: parsed };
+  return { ok: true, status: res.status, data: (parsed as { data: T }).data };
+}
+```
+
+It returns a result object rather than throwing, because a route handler's job is to pass the status through, not to decide what a `409` means.
+
+**A handler, in full**
+
+```ts
+// app/api/orders/route.ts
+import { NextResponse } from "next/server";
+import { proxyPost } from "@/lib/api-write";
+import type { Order } from "@/lib/api-types";
+
+export async function POST(request: Request) {
+  let body: unknown;
+  try {
+    body = await request.json();
+    if (body === null || typeof body !== "object") throw new Error("not an object");
+  } catch {
+    return NextResponse.json({ message: "Invalid request" }, { status: 400 });
+  }
+
+  const result = await proxyPost<Order>("/orders", body);
+
+  // Pass the status straight through: 409 and 422 both carry shapes the cart needs.
+  if (!result.ok) {
+    return NextResponse.json(result.body ?? { message: "Order failed" }, {
+      status: result.status,
+    });
+  }
+  return NextResponse.json({ data: result.data }, { status: 201 });
+}
+```
+
+The `null`-and-non-object guard is the same one `app/api/contact/route.ts` already has, and it is there for the same reason: `null`, a bare number and a bare string are all valid JSON that carry no fields, and reading a property off them throws a `500` where a `400` is correct.
+
+**Do not re-validate the body in the handler.** It is tempting to check the address and the lines before forwarding, but then the rules live in two places and drift. Forward it and pass the `422` back. The one exception is the contact form, where validation already exists and is already tested — keep it as a cheap first filter and make sure the API's `422` still reaches the form behind it.
+
+**Handlers needed**
+
+| Route handler | Forwards to |
+| --- | --- |
+| `app/api/orders/route.ts` | `POST /orders` |
+| `app/api/orders/lookup/route.ts` | `POST /orders/lookup` |
+| `app/api/discounts/validate/route.ts` | `POST /discounts/validate` |
+| `app/api/contact/route.ts` | `POST /contact` — exists; change the body, keep the tests |
+| `app/api/newsletter/route.ts` | `POST /newsletter` |
+| `app/api/revalidate/route.ts` | Nothing — the admin calls *this*, with `REVALIDATE_SECRET` |
+
+The last one is the inbound direction: the admin panel calls it after a save so a price change is live in seconds rather than after the cache window. It checks `REVALIDATE_SECRET` and calls `revalidateTag` with the tags listed in the next section.
+
+## Every call in one table
+
+Where each call lives, how long it is cached, and what invalidates it.
+
+| Call | Called from | Cache | Tags |
+| --- | --- | --- | --- |
+| `GET /products` | `app/page.tsx`, `/products`, `/collections/[slug]` | 300s | `products` |
+| `GET /products?slugs=` | `components/CartView.tsx` | 60s | `products` |
+| `GET /products/{slug}` | `app/products/[slug]/page.tsx` | 300s | `products`, `product:{slug}` |
+| `GET /collections` | `components/SiteHeader.tsx`, `/collections` | 900s | `collections` |
+| `GET /collections/{slug}` | `app/collections/[slug]/page.tsx` | 300s | `collections`, `collection:{slug}` |
+| `GET /settings` | `app/layout.tsx`, cart, help | 900s | `settings` |
+| `GET /faqs` | `app/help/page.tsx`, `app/page.tsx` | 900s | `faqs` |
+| `POST /orders` | `app/api/orders/route.ts` | never | — |
+| `POST /orders/lookup` | `app/api/orders/lookup/route.ts` | never | — |
+| `POST /discounts/validate` | `app/api/discounts/validate/route.ts` | never | — |
+| `POST /contact` | `app/api/contact/route.ts` | never | — |
+| `POST /newsletter` | `app/api/newsletter/route.ts` | never | — |
+
+The cart's 60-second window is shorter than the catalogue's 300 on purpose: it is the one read where a stale price is visible right before payment.
+
+**What the admin revalidates**
+
+```ts
+// app/api/revalidate/route.ts
+const { secret, tags } = await request.json();
+if (secret !== process.env.REVALIDATE_SECRET) {
+  return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+}
+for (const tag of tags as string[]) revalidateTag(tag);
+return NextResponse.json({ ok: true });
+```
+
+| Admin action | Tags to send |
+| --- | --- |
+| Product saved | `products`, `product:{slug}` |
+| Variant stock or price changed | `products`, `product:{slug}` |
+| Collection saved or membership changed | `collections`, `collection:{slug}`, `products` |
+| Setting changed | `settings` |
+| FAQ changed | `faqs` |
+
+Compare the secret with a constant-time comparison in production rather than `!==`. And note the third row sends `products` as well: changing a collection's membership changes what `GET /products?collection=` returns, so the product tag has to go too.
+
+## Client-side validation that matches the server
+
+Validate in the browser to save a round trip, never to decide. The server validates everything again and its answer wins. The point of matching the rules is that a visitor should not be able to submit a form the server will certainly reject.
+
+| Field | Rule | Message |
+| --- | --- | --- |
+| `email` | Required; a real address | Enter a valid email address. |
+| `lines` | At least one | Your cart is empty. |
+| `lines[].qty` | Integer 1–10 | Choose between 1 and 10. |
+| `shipping.name` | Required, ≤ 160 | Enter the recipient's name. |
+| `shipping.line1` | Required, ≤ 160 | Enter the street address. |
+| `shipping.city` | Required, ≤ 120 | Enter the city. |
+| `shipping.postcode` | Required, ≤ 20 | Enter the postcode. |
+| `shipping.country` | Required, two letters | Choose a country. |
+| `shipping.phone` | Optional, ≤ 40 | — |
+| `note` | Optional, ≤ 500 | Keep it under 500 characters. |
+| `contact.message` | Required, ≤ 5000 | Enter a message. |
+
+**Do not validate postcodes by country.** A regex per country is a large amount of code that is wrong for somewhere, and the failure mode is a customer who cannot check out at all. Require non-empty and let the server and the courier judge.
+
+**`country` is ISO 3166-1 alpha-2.** `"GB"`, not `"UK"`, not `"United Kingdom"`. Use a `<select>` with codes as values so the field cannot be wrong.
+
+**Email validation is the one place to be stricter than the current code.** `app/api/contact/route.ts` checks `email.includes("@")`, which accepts `a@b`. Leave that handler alone — its tests pin the behaviour and the server does the real check — but in the checkout form, use something that at least requires a dot in the domain. An order placed against an unreachable address cannot be recovered: with no accounts, that email is the only route back to the customer, and the only key for the lookup endpoint.
+
+That last point is the thing to be most careful about in the whole form. Everything else a visitor gets wrong can be fixed by support. A mistyped email cannot.
+
+## Build order
+
+Seven steps, smallest surface first. Each one leaves the storefront working, so none of them has to be finished in a hurry.
+
+1. **Types and the helper.** `lib/api-types.ts` and `lib/api.ts`, with `API_BASE_URL` in `.env.local`. Nothing renders differently yet.
+2. **FAQs.** `lib/faq.ts` keeps the `Faq` type, loses the array, gains `getFaqs()`. One file, no component changes, and it proves the base URL, the helper, the cache window and the revalidation hook end to end.
+3. **Settings.** `lib/config.ts` becomes async. This is the first awkward one: `money()` and `priceOf()` are imported synchronously all over the codebase, so pass settings down from the server components that fetch them rather than making every caller async. Keep the `[BRACKETS]` placeholders as the fallback while the admin has no data.
+4. **Products, read-only.** `getProducts()`, `getProduct()`, `generateStaticParams`. The homepage still destructures two products at this point — it will keep working as long as the API returns at least two, which is exactly the trap, so fix `app/page.tsx` in the same step.
+5. **The cart.** `getProductsBySlugs()` plus the four stale-cart behaviours: drop what no longer resolves and say so, show the current price, flag a changed one, cap quantity at available stock.
+6. **The write proxy and the forms.** Contact first, because its handler and its tests already exist and only the body changes. Then newsletter, then discount validation.
+7. **Checkout.** `POST /orders` last, with the `409` handling written at the same time as the happy path rather than after it. This is the only step that cannot be half-done: an order that fails silently loses a sale and a customer.
+
+**What to stub meanwhile**
+
+Until the Laravel app exists, point `API_BASE_URL` at a local mock — route handlers under `app/api/mock/v1/` returning the payloads in this document are enough, and they double as fixtures. The shapes here are the contract, so a mock built from them will not mislead you.
+
+**What will break in the test suite**
+
+The 309 tests currently pass against static data, and three of them pin assumptions this work removes:
+
+| Test | Why it fails | What to do |
+| --- | --- | --- |
+| `products.test.ts` → `otherProduct()` | Replaced by `related` from the API | Delete the assertion; test `related` rendering instead |
+| `cart-view-shipping.test.tsx` | Stubs `shippingFlat`; now from settings | Stub the settings fetch instead |
+| `config.test.ts` → `priceOf()` | Prices move to the API | Keep it — the `typeof` guard still matters |
+
+Everything else should keep passing, because the API returns the existing `Product` type field for field. That is the single best signal that the integration is going well: if a component test starts failing, the payload has drifted from the contract, not the other way round.
+
+**One thing deliberately left out**
+
+There is no idempotency key on `POST /orders` in this version, so a timed-out order cannot be safely retried. The storefront works around it by telling the visitor to check with the lookup endpoint. If duplicate orders show up in practice, that is the first thing to add — a client-generated UUID sent as `Idempotency-Key`, stored on the order, with a replay returning the original `201`.

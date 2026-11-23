@@ -10,7 +10,11 @@ import { NextResponse } from "next/server";
 export async function POST(request: Request) {
   let body: Record<string, unknown>;
   try {
-    body = await request.json();
+    const parsed: unknown = await request.json();
+    // `null`, a bare number and a bare string are all valid JSON but carry no
+    // fields. Reject them here instead of throwing on property access below.
+    if (parsed === null || typeof parsed !== "object") throw new Error("not an object");
+    body = parsed as Record<string, unknown>;
   } catch {
     return NextResponse.json({ ok: false, error: "Invalid request" }, { status: 400 });
   }
