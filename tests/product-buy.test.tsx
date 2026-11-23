@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import ProductBuy from "@/components/ProductBuy";
+import { MAX_CART_LINES, MAX_LINE_QTY } from "@/lib/api";
 import { CartProvider } from "@/lib/cart";
 import { money, notes, priceOf, sizes } from "@/lib/config";
 import { products } from "@/lib/products";
@@ -43,7 +44,10 @@ describe("product information", () => {
 
   it("sets the tail of the name apart for the italic accent", () => {
     const { container } = setup();
-    expect(container.querySelector("h1 em")).toHaveTextContent(product.nameTail);
+    // `nameTail` is nullable in the API; this fixture has one, and the italic
+    // accent only exists when it does.
+    expect(product.nameTail).not.toBeNull();
+    expect(container.querySelector("h1 em")).toHaveTextContent(product.nameTail ?? "");
   });
 
   it("shows the formatted price", () => {
@@ -233,5 +237,58 @@ describe("details accordion", () => {
     expect(details).toHaveTextContent("–");
     await user.click(details);
     expect(screen.getByRole("button", { name: /Details/ })).toHaveTextContent("+");
+  });
+});
+
+// The API takes 1-20 lines with a quantity of 1-10. When the cart refuses a
+// line for either reason, the live region has to say which — otherwise the
+// button looks broken.
+describe("the cart's limits", () => {
+  function seedCart(items: { slug: string; size: string; qty: number }[]) {
+    window.localStorage.setItem("luxCart", JSON.stringify(items));
+  }
+
+  it("says when a size is already at the most one order can carry", async () => {
+    seedCart([{ slug: product.slug, size: "M", qty: MAX_LINE_QTY }]);
+    const { user, sizeButton, addButton, live } = setup();
+    await user.click(sizeButton("M"));
+    await user.click(addButton());
+    expect(live()).toHaveTextContent(`${MAX_LINE_QTY} is the most of one size`);
+  });
+
+  it("does not claim the line was added when it was refused", async () => {
+    seedCart([{ slug: product.slug, size: "M", qty: MAX_LINE_QTY }]);
+    const { user, sizeButton, addButton, live } = setup();
+    await user.click(sizeButton("M"));
+    await user.click(addButton());
+    expect(live()).not.toHaveTextContent("Added");
+    expect(savedCart()).toEqual([{ slug: product.slug, size: "M", qty: MAX_LINE_QTY }]);
+  });
+
+  it("says when the cart holds as many lines as an order can", async () => {
+    seedCart(
+      Array.from({ length: MAX_CART_LINES }, (_, n) => ({
+        slug: `design-${n}`,
+        size: "M",
+        qty: 1,
+      })),
+    );
+    const { user, sizeButton, addButton, live } = setup();
+    await user.click(sizeButton("L"));
+    await user.click(addButton());
+    expect(live()).toHaveTextContent("Your cart is full");
+    expect(savedCart()).toHaveLength(MAX_CART_LINES);
+  });
+
+  it("clears the refusal once a line goes through", async () => {
+    seedCart([{ slug: product.slug, size: "M", qty: MAX_LINE_QTY }]);
+    const { user, sizeButton, addButton, live } = setup();
+    await user.click(sizeButton("M"));
+    await user.click(addButton());
+    expect(live()).toHaveTextContent("is the most of one size");
+    await user.click(sizeButton("S"));
+    await user.click(addButton());
+    expect(live()).not.toHaveTextContent("is the most of one size");
+    expect(live()).toHaveTextContent("Added");
   });
 });

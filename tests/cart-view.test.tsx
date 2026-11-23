@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CartView from "@/components/CartView";
 import { CartProvider, type CartItem } from "@/lib/cart";
+import { MAX_LINE_QTY } from "@/lib/api";
 import { money, notes, priceOf, shippingFlat } from "@/lib/config";
 import { products } from "@/lib/products";
 
@@ -57,8 +58,20 @@ describe("empty cart", () => {
     expect(screen.queryByRole("button", { name: "Place order" })).not.toBeInTheDocument();
   });
 
-  it("drops saved lines whose product no longer exists", () => {
+  // A saved line whose product has gone used to be dropped from the view while
+  // staying in storage, so the shopper saw an empty cart that the header still
+  // counted and nothing could clear it. The row is shown instead, named from
+  // its slug and removable; against the API the same line comes back as `gone`.
+  it("still shows a saved line whose product no longer exists", () => {
     setup([{ slug: "deleted-product", size: "M", qty: 2 }]);
+    expect(screen.queryByRole("heading", { name: "Your cart is empty." })).not.toBeInTheDocument();
+    expect(screen.getByText("Deleted Product")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeInTheDocument();
+  });
+
+  it("empties once that line is removed", async () => {
+    const { user } = setup([{ slug: "deleted-product", size: "M", qty: 2 }]);
+    await user.click(screen.getByRole("button", { name: "Remove" }));
     expect(screen.getByRole("heading", { name: "Your cart is empty." })).toBeInTheDocument();
   });
 });
@@ -117,6 +130,20 @@ describe("changing quantities", () => {
     const { user } = setup([{ slug: crane.slug, size: "M", qty: 1 }]);
     await user.click(screen.getByLabelText("One fewer"));
     expect(screen.getByLabelText("Quantity")).toHaveTextContent("1");
+  });
+
+  // The API takes a quantity of 1-10 per line, so the controls stop there
+  // rather than letting the shopper build a cart that checkout would reject.
+  it("will not go above the most one order can carry", () => {
+    setup([{ slug: crane.slug, size: "M", qty: MAX_LINE_QTY }]);
+    expect(screen.getByLabelText("One more")).toBeDisabled();
+    expect(screen.getByLabelText("One fewer")).toBeEnabled();
+  });
+
+  it("stops the shopper reaching zero from the other end", () => {
+    setup([{ slug: crane.slug, size: "M", qty: 1 }]);
+    expect(screen.getByLabelText("One fewer")).toBeDisabled();
+    expect(screen.getByLabelText("One more")).toBeEnabled();
   });
 
   it("recalculates the line total", async () => {
@@ -187,15 +214,24 @@ describe("summary", () => {
     expect(summary().getByText(shippingFlat ? money(shippingFlat) : "Free")).toBeInTheDocument();
   });
 
-  it("leaves tax as a placeholder", () => {
-    const { summary } = setup([{ slug: crane.slug, size: "M", qty: 1 }]);
-    expect(summary().getByText("[TAX]")).toBeInTheDocument();
+  // The API is the only authority on what the customer is charged: it applies
+  // `taxRateBp` and returns the priced order. A figure worked out here would be
+  // about 8.5% short of the real one, so the cart names neither tax nor total.
+  it("leaves tax to the order response rather than estimating it", () => {
+    const { summaryValue } = setup([{ slug: crane.slug, size: "M", qty: 1 }]);
+    expect(summaryValue("Tax")).toBe("Calculated at checkout");
   });
 
-  it("shows a total that includes delivery", () => {
+  it("leaves the total to the order response too, since tax is part of it", () => {
     const { summaryValue } = setup([{ slug: crane.slug, size: "M", qty: 2 }]);
-    const total = 2 * priceOf(crane.slug) + shippingFlat;
-    expect(summaryValue("Total")).toBe(money(total));
+    expect(summaryValue("Total")).toBe("Calculated at checkout");
+  });
+
+  it("says where delivery and tax are confirmed, so the gap is explained", () => {
+    const { summary } = setup([{ slug: crane.slug, size: "M", qty: 1 }]);
+    expect(
+      summary().getByText(/Delivery and tax are confirmed when you place the order/),
+    ).toBeInTheDocument();
   });
 
   it("shows delivery as its own row rather than folding it into the subtotal", () => {
@@ -232,7 +268,10 @@ describe("checkout form", () => {
       Email: "email",
       "First name": "given-name",
       "Last name": "family-name",
-      Address: "street-address",
+      // Two address lines now, so the pair is address-line1/2 rather than the
+      // single `street-address` a one-line field would use.
+      Address: "address-line1",
+      "Address line 2": "address-line2",
       City: "address-level2",
       Postcode: "postal-code",
       Country: "country-name",
@@ -254,10 +293,21 @@ describe("checkout form", () => {
     }
   });
 
-  it("marks the payment section as a placeholder, collecting no card details", () => {
+  // There is no online payment in this API by design: an order is created
+  // `awaiting_payment` and its `paymentInstructions` say how to pay. A "connect
+  // your provider here" placeholder would describe a checkout that is not the
+  // one being built.
+  it("says plainly that nothing is charged at this step", () => {
     setup([{ slug: crane.slug, size: "M", qty: 1 }]);
-    expect(screen.getByText(/No card details are collected in this demo/)).toBeInTheDocument();
-    expect(screen.getByText(/\[PAYMENT PROVIDER FIELDS\]/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is charged here/)).toBeInTheDocument();
+    expect(screen.getByText(/payment instructions with your order number/)).toBeInTheDocument();
+  });
+
+  it("offers the optional fields the API accepts", () => {
+    setup([{ slug: crane.slug, size: "M", qty: 1 }]);
+    for (const label of ["Phone", "Address line 2", "Order notes"]) {
+      expect(screen.getByLabelText(label), label).not.toBeRequired();
+    }
   });
 
   it("shows the delivery methods note", () => {

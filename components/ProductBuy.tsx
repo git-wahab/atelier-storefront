@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useCart } from "@/lib/cart";
+import { MAX_CART_LINES, MAX_LINE_QTY } from "@/lib/api";
+import { useCart, type AddResult } from "@/lib/cart";
 import { money, notes, priceOf, sizes } from "@/lib/config";
 import type { Product } from "@/lib/products";
 
@@ -12,6 +13,8 @@ export default function ProductBuy({ product }: { product: Product }) {
   const [size, setSize] = useState<string | null>(null);
   const [needSize, setNeedSize] = useState(false);
   const [added, setAdded] = useState(false);
+  /** Set when the cart refused the line, so the shopper hears why. */
+  const [refused, setRefused] = useState<Exclude<AddResult, "added"> | null>(null);
   const [open, setOpen] = useState<number | null>(0);
 
   const sections = [
@@ -24,11 +27,13 @@ export default function ProductBuy({ product }: { product: Product }) {
     if (!size) {
       setNeedSize(true);
       setAdded(false);
+      setRefused(null);
       return;
     }
-    add(product.slug, size);
-    setAdded(true);
+    const result = add(product.slug, size);
     setNeedSize(false);
+    setAdded(result === "added");
+    setRefused(result === "added" ? null : result);
   }
 
   return (
@@ -78,6 +83,16 @@ export default function ProductBuy({ product }: { product: Product }) {
         <button type="button" className="btn-ink w-full" onClick={onAdd}>Add to cart</button>
         <div aria-live="polite" className="flex flex-col gap-2">
           {needSize && <span className="cap text-bronze">Choose a size first</span>}
+          {refused === "full" && (
+            <span className="cap text-bronze">
+              Your cart is full · {MAX_CART_LINES} lines is the most one order can hold
+            </span>
+          )}
+          {refused === "max" && (
+            <span className="cap text-bronze">
+              {MAX_LINE_QTY} is the most of one size in a single order
+            </span>
+          )}
           {added && (
             <span className="cap text-ink">
               Added · {count} in cart · <Link href="/cart" className="underline underline-offset-4">View cart</Link>

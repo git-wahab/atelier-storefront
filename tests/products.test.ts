@@ -8,8 +8,16 @@ import { getProduct, otherProduct, products, type Product } from "@/lib/products
 const PUBLIC_DIR = resolve(process.cwd(), "public");
 
 /** Every image src referenced anywhere on a product. */
-function imagesOf(p: Product) {
-  return [p.hoodie, ...p.gallery, ...p.figures, { src: p.pair, alt: `${p.name} artwork` }];
+function imagesOf(p: Product): { src: string; alt: string }[] {
+  // `hoodie` and `pair` are both nullable in the API, so skip them when they
+  // are absent rather than asserting: the pages already guard on them.
+  const all = [
+    p.hoodie,
+    ...p.gallery,
+    ...p.figures,
+    p.pair === null ? null : { src: p.pair, alt: `${p.name} artwork` },
+  ];
+  return all.filter((i): i is { src: string; alt: string } => i !== null);
 }
 
 describe("catalogue shape", () => {
@@ -42,7 +50,6 @@ describe("catalogue shape", () => {
       for (const key of [
         "name",
         "nameLead",
-        "nameTail",
         "fleece",
         "threads",
         "short",
@@ -53,19 +60,27 @@ describe("catalogue shape", () => {
       ] as const) {
         expect(p[key].trim().length, `${p.slug}.${key}`).toBeGreaterThan(0);
       }
+      // `nameTail` is nullable in the API: a one-part name simply loses the
+      // italic accent. When it is set it still has to be real copy.
+      if (p.nameTail !== null) {
+        expect(p.nameTail.trim().length, `${p.slug}.nameTail`).toBeGreaterThan(0);
+      }
     }
   });
 
   it("splits the name into lead and tail without losing a word", () => {
     for (const p of products) {
-      expect(`${p.nameLead} ${p.nameTail}`).toBe(p.name);
+      const rejoined = p.nameTail === null ? p.nameLead : `${p.nameLead} ${p.nameTail}`;
+      expect(rejoined).toBe(p.name);
     }
   });
 
-  it("gives each heading exactly two parts, for the plain/italic pair", () => {
+  // The API sends one or two lines per heading; Heading drops the italic half
+  // when the second line is missing, so both shapes render.
+  it("gives each heading one or two parts, for the plain/italic pair", () => {
     for (const p of products) {
-      expect(p.artHeading).toHaveLength(2);
-      expect(p.closeHeading).toHaveLength(2);
+      expect([1, 2]).toContain(p.artHeading.length);
+      expect([1, 2]).toContain(p.closeHeading.length);
       for (const part of [...p.artHeading, ...p.closeHeading]) {
         expect(part.trim().length).toBeGreaterThan(0);
       }
@@ -102,17 +117,20 @@ describe("product imagery", () => {
     }
   });
 
-  it("uses only the two aspect ratios the Photo component styles", () => {
+  it("uses only the aspect ratios the API defines", () => {
     for (const p of products) {
-      for (const f of p.figures) expect(["3/4", "1/1"]).toContain(f.ratio);
+      // `null` is legal and means Photo falls back to its own 4/5 default.
+      for (const f of p.figures) expect(["3/4", "1/1", "4/5", null]).toContain(f.ratio);
     }
   });
 
+  // Both are nullable in the API; every figure in this fixture sets them, and
+  // the product page only renders the ones that are there.
   it("gives every figure a caption and a note", () => {
     for (const p of products) {
       for (const f of p.figures) {
-        expect(f.caption.trim().length).toBeGreaterThan(0);
-        expect(f.note.trim().length).toBeGreaterThan(0);
+        expect(f.caption?.trim().length ?? 0, `${p.slug}: caption`).toBeGreaterThan(0);
+        expect(f.note?.trim().length ?? 0, `${p.slug}: note`).toBeGreaterThan(0);
       }
     }
   });
@@ -124,10 +142,12 @@ describe("product imagery", () => {
     }
   });
 
-  it("uses a CSS position pair wherever one is given", () => {
+  // Only figures carry a focal point: the API's plain image shape has no
+  // `position` field, so gallery images all use ProductGallery's one default.
+  it("uses a CSS position pair wherever a figure gives one", () => {
     for (const p of products) {
-      for (const img of [...p.gallery, ...p.figures]) {
-        if (img.position !== undefined) expect(img.position).toMatch(/^\S+\s+\S+$/);
+      for (const f of p.figures) {
+        if (f.position !== null) expect(f.position).toMatch(/^\S+\s+\S+$/);
       }
     }
   });

@@ -73,9 +73,11 @@ export default function ProductPage({ params }: { params: { slug: string } }) {
             <p className="copy">{p.story}</p>
             <p className="copy">The two sleeves mirror each other, so the scene meets across your chest when your arms come together.</p>
           </div>
-          <div className="flex min-w-0 flex-[1.2_1_420px] justify-center">
-            <Image className="drift h-auto w-[min(520px,100%)]" src={p.pair} alt={`${p.name} artwork, left and right sleeve`} width={1023} height={1400} sizes="520px" />
-          </div>
+          {p.pair && (
+            <div className="flex min-w-0 flex-[1.2_1_420px] justify-center">
+              <Image className="drift h-auto w-[min(520px,100%)]" src={p.pair} alt={`${p.name} artwork, left and right sleeve`} width={1023} height={1400} sizes="520px" />
+            </div>
+          )}
         </div>
       </section>
 
@@ -85,7 +87,7 @@ export default function ProductPage({ params }: { params: { slug: string } }) {
         <div className="grid items-start gap-6 [grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))]">
           {p.figures.map((f) => (
             <figure key={f.caption} className="hoverable m-0 flex flex-col gap-3.5">
-              <Photo src={f.src} alt={f.alt} ratio={f.ratio} position={f.position ?? "50% 30%"} plain={f.plain} sizes="(max-width: 860px) 100vw, 33vw" />
+              <Photo src={f.src} alt={f.alt} ratio={f.ratio ?? undefined} position={f.position ?? "50% 30%"} plain={f.plain} sizes="(max-width: 860px) 100vw, 33vw" />
               <figcaption className="flex flex-col gap-1.5"><span className="cap">{f.caption}</span><span className="copy text-[15px]">{f.note}</span></figcaption>
             </figure>
           ))}

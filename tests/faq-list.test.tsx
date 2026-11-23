@@ -5,22 +5,23 @@ import FaqList from "@/components/FaqList";
 import { faqs, type Faq } from "@/lib/faq";
 
 const sample: Faq[] = [
-  { q: "First question?", a: "First answer." },
-  { q: "Second question?", a: "Second answer." },
-  { q: "Third question?", a: "Third answer." },
+  { question: "First question?", answer: "First answer." },
+  { question: "Second question?", answer: "Second answer." },
+  { question: "Third question?", answer: "Third answer." },
 ];
 
-const toggle = (q: string) => screen.getByRole("button", { name: new RegExp(q.replace("?", "\\?")) });
+const toggle = (question: string) =>
+  screen.getByRole("button", { name: new RegExp(question.replace("?", "\\?")) });
 
 describe("rendering", () => {
   it("renders a toggle for every question", () => {
     render(<FaqList items={sample} />);
-    for (const f of sample) expect(toggle(f.q)).toBeInTheDocument();
+    for (const f of sample) expect(toggle(f.question)).toBeInTheDocument();
   });
 
   it("opens the first question by default", () => {
     render(<FaqList items={sample} />);
-    expect(toggle(sample[0].q)).toHaveAttribute("aria-expanded", "true");
+    expect(toggle(sample[0].question)).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("First answer.")).toBeInTheDocument();
   });
 
@@ -32,7 +33,7 @@ describe("rendering", () => {
 
   it("points each toggle at the answer it controls", () => {
     render(<FaqList items={sample} />);
-    expect(toggle(sample[0].q)).toHaveAttribute("aria-controls", "faq-0");
+    expect(toggle(sample[0].question)).toHaveAttribute("aria-controls", "faq-0");
     expect(screen.getByText("First answer.")).toHaveAttribute("id", "faq-0");
   });
 
@@ -51,15 +52,15 @@ describe("toggling", () => {
   it("closes the open question when clicked again", async () => {
     const user = userEvent.setup();
     render(<FaqList items={sample} />);
-    await user.click(toggle(sample[0].q));
-    expect(toggle(sample[0].q)).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle(sample[0].question));
+    expect(toggle(sample[0].question)).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("First answer.")).not.toBeInTheDocument();
   });
 
   it("opens another question and closes the previous one", async () => {
     const user = userEvent.setup();
     render(<FaqList items={sample} />);
-    await user.click(toggle(sample[1].q));
+    await user.click(toggle(sample[1].question));
     expect(screen.getByText("Second answer.")).toBeInTheDocument();
     expect(screen.queryByText("First answer.")).not.toBeInTheDocument();
   });
@@ -68,13 +69,13 @@ describe("toggling", () => {
     const user = userEvent.setup();
     render(<FaqList items={sample} />);
     const openCount = () =>
-      sample.filter((x) => toggle(x.q).getAttribute("aria-expanded") === "true").length;
+      sample.filter((x) => toggle(x.question).getAttribute("aria-expanded") === "true").length;
 
     // Clicking each in turn: the first click closes the default-open item, so
     // the count legitimately drops to 0. The invariant is "at most one".
     expect(openCount()).toBe(1);
     for (const f of sample) {
-      await user.click(toggle(f.q));
+      await user.click(toggle(f.question));
       expect(openCount()).toBeLessThanOrEqual(1);
     }
   });
@@ -82,9 +83,9 @@ describe("toggling", () => {
   it("opens exactly the question that was clicked while another is open", async () => {
     const user = userEvent.setup();
     render(<FaqList items={sample} />);
-    await user.click(toggle(sample[2].q));
+    await user.click(toggle(sample[2].question));
     const expanded = sample.filter(
-      (x) => toggle(x.q).getAttribute("aria-expanded") === "true",
+      (x) => toggle(x.question).getAttribute("aria-expanded") === "true",
     );
     expect(expanded).toEqual([sample[2]]);
   });
@@ -92,17 +93,17 @@ describe("toggling", () => {
   it("swaps + and – as a question opens and closes", async () => {
     const user = userEvent.setup();
     render(<FaqList items={sample} />);
-    expect(toggle(sample[0].q)).toHaveTextContent("–");
-    await user.click(toggle(sample[0].q));
-    expect(toggle(sample[0].q)).toHaveTextContent("+");
+    expect(toggle(sample[0].question)).toHaveTextContent("–");
+    await user.click(toggle(sample[0].question));
+    expect(toggle(sample[0].question)).toHaveTextContent("+");
   });
 
   it("can be driven from the keyboard", async () => {
     const user = userEvent.setup();
     render(<FaqList items={sample} />);
     await user.tab();
-    expect(toggle(sample[0].q)).toHaveFocus();
+    expect(toggle(sample[0].question)).toHaveFocus();
     await user.keyboard("{Enter}");
-    expect(toggle(sample[0].q)).toHaveAttribute("aria-expanded", "false");
+    expect(toggle(sample[0].question)).toHaveAttribute("aria-expanded", "false");
   });
 });

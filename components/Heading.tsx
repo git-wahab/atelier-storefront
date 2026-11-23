@@ -9,7 +9,8 @@ export default function Heading({
 }: {
   cap?: string;
   lead: string;
-  tail?: string;
+  /** Null as well as undefined: the API sends `nameTail: null` for a one-part name. */
+  tail?: string | null;
   as?: "h1" | "h2";
   size?: "section" | "side";
   className?: string;

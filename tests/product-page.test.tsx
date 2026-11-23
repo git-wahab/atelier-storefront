@@ -103,8 +103,9 @@ describe("rendering a product page", () => {
   it("shows every close-up figure with its caption and note", () => {
     renderPage(crane.slug);
     for (const f of crane.figures) {
-      expect(screen.getByText(f.caption)).toBeInTheDocument();
-      expect(screen.getByText(f.note)).toBeInTheDocument();
+      // Both are nullable in the API; every figure in this fixture sets them.
+      expect(screen.getByText(f.caption ?? "")).toBeInTheDocument();
+      expect(screen.getByText(f.note ?? "")).toBeInTheDocument();
     }
   });
 

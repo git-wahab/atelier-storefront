@@ -11,7 +11,7 @@ export default function ProductGallery({ images }: { images: Img[] }) {
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <div className="frame max-w-full" style={{ aspectRatio: "4/5" }}>
-        <Image key={main.src} src={main.src} alt={main.alt} fill priority sizes="(max-width: 860px) 100vw, 55vw" style={{ objectPosition: main.position ?? "50% 25%" }} />
+        <Image key={main.src} src={main.src} alt={main.alt} fill priority sizes="(max-width: 860px) 100vw, 55vw" style={{ objectPosition: "50% 25%" }} />
       </div>
       <div className="grid gap-2 sm:gap-3" style={{ gridTemplateColumns: `repeat(${images.length}, minmax(0, 1fr))` }}>
         {images.map((im, i) => (

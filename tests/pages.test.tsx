@@ -79,11 +79,11 @@ describe("homepage", () => {
 
   it("shows a short selection of the FAQ, not the whole list", () => {
     for (const f of faqs.slice(0, 4)) {
-      expect(screen.getByRole("button", { name: new RegExp(f.q.replace("?", "\\?")) })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: new RegExp(f.question.replace("?", "\\?")) })).toBeInTheDocument();
     }
     const last = faqs[faqs.length - 1];
     expect(
-      screen.queryByRole("button", { name: new RegExp(last.q.replace("?", "\\?")) }),
+      screen.queryByRole("button", { name: new RegExp(last.question.replace("?", "\\?")) }),
     ).not.toBeInTheDocument();
   });
 
@@ -147,7 +147,7 @@ describe("help page", () => {
   it("shows the whole FAQ", () => {
     for (const f of faqs) {
       expect(
-        screen.getByRole("button", { name: new RegExp(f.q.replace("?", "\\?")) }),
+        screen.getByRole("button", { name: new RegExp(f.question.replace("?", "\\?")) }),
       ).toBeInTheDocument();
     }
   });

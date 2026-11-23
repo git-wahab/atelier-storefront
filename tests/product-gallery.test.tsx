@@ -5,9 +5,9 @@ import ProductGallery from "@/components/ProductGallery";
 import { products, type Img } from "@/lib/products";
 
 const images: Img[] = [
-  { src: "/images/crane-hoodie.jpg", alt: "The hoodie, front" },
-  { src: "/images/crane-sleeve-left.jpg", alt: "Left sleeve embroidery" },
-  { src: "/images/crane-detail.jpg", alt: "Blossom detail", position: "50% 10%" },
+  { src: "/images/crane-hoodie.jpg", alt: "The hoodie, front", width: 843, height: 1264 },
+  { src: "/images/crane-sleeve-left.jpg", alt: "Left sleeve embroidery", width: 600, height: 1480 },
+  { src: "/images/crane-detail.jpg", alt: "Blossom detail", width: null, height: null },
 ];
 
 const thumb = (alt: string) => screen.getByRole("button", { name: alt });
@@ -81,16 +81,20 @@ describe("selecting a thumbnail", () => {
     expect(screen.getByAltText(images[0].alt)).toBeInTheDocument();
   });
 
-  it("applies the image's own focal point when it has one", async () => {
+  // Gallery images carry no focal point: the API's image shape has no
+  // `position` field — only figures do — so every gallery image uses the one
+  // default. This pins that, so reintroducing a per-image override is a
+  // deliberate change rather than an accident.
+  it("uses the same focal point for the first image", () => {
+    render(<ProductGallery images={images} />);
+    expect(screen.getByAltText(images[0].alt).style.objectPosition).toBe("50% 25%");
+  });
+
+  it("uses that same focal point after swapping image", async () => {
     const user = userEvent.setup();
     render(<ProductGallery images={images} />);
     await user.click(thumb(images[2].alt));
-    expect(screen.getByAltText(images[2].alt).style.objectPosition).toBe("50% 10%");
-  });
-
-  it("falls back to a default focal point", () => {
-    render(<ProductGallery images={images} />);
-    expect(screen.getByAltText(images[0].alt).style.objectPosition).toBe("50% 25%");
+    expect(screen.getByAltText(images[2].alt).style.objectPosition).toBe("50% 25%");
   });
 });
 

@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { products } from "@/lib/products";
+import { renderable } from "@/lib/products";
 import { faqs } from "@/lib/faq";
 import { money, notes, priceOf } from "@/lib/config";
 import Photo from "@/components/Photo";
@@ -9,7 +9,10 @@ import FactsStrip from "@/components/FactsStrip";
 import FaqList from "@/components/FaqList";
 import Newsletter from "@/components/Newsletter";
 
-const [crane, bloom] = products;
+// TODO: both this destructuring and `compareRows` below assume exactly two
+// designs. See "The two-product assumptions break" in the admin panel spec —
+// they must go before the admin makes adding a third product a one-minute job.
+const [crane, bloom] = renderable;
 
 const craft = [
   { title: "Sleeve to sleeve", body: "The scene runs the full length of both arms, not a single patch." },
@@ -84,7 +87,7 @@ export default function Home() {
           <p className="copy max-w-[340px]">Same fit, same fleece. The difference is the story stitched into the arms.</p>
         </div>
         <div className="grid gap-x-8 gap-y-12 [grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr))]">
-          {products.map((p) => (
+          {renderable.map((p) => (
             <article key={p.slug} className="hoverable flex flex-col gap-[22px]">
               <Link href={`/products/${p.slug}`} aria-label={p.name}>
                 <Photo src={p.hoodie.src} alt={p.hoodie.alt} ratio="4/5" position="50% 22%" />
@@ -114,9 +117,11 @@ export default function Home() {
             <p className="copy max-w-[520px]">Each design is a pair. This is the artwork before it meets the fleece, one half for each sleeve.</p>
           </div>
           <div className="grid border-t border-line [grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr))]">
-            {products.map((p, i) => (
+            {renderable.map((p, i) => (
               <div key={p.slug} className={`flex flex-col items-center gap-7 py-12 text-center ${i === 0 ? "md:pr-8" : "md:border-l md:border-line md:pl-8"}`}>
-                <Image className="drift h-auto w-[min(420px,100%)]" src={p.pair} alt={`${p.name} artwork, left and right sleeve`} width={1023} height={1400} sizes="420px" />
+                {p.pair && (
+                  <Image className="drift h-auto w-[min(420px,100%)]" src={p.pair} alt={`${p.name} artwork, left and right sleeve`} width={1023} height={1400} sizes="420px" />
+                )}
                 <div className="flex flex-col gap-2">
                   <span className="cap">Design {p.number}</span>
                   <span className="display text-[34px] leading-[1.05]">{p.name}</span>
@@ -185,7 +190,7 @@ export default function Home() {
             <thead>
               <tr className="border-b border-line">
                 <th className="w-[200px] py-[22px]"><span className="sr-only">Feature</span></th>
-                {products.map((p) => (
+                {renderable.map((p) => (
                   <th key={p.slug} scope="col" className="py-[22px] pr-8 font-serif text-[30px] font-normal leading-[1.1]">{p.name}</th>
                 ))}
               </tr>
@@ -200,7 +205,7 @@ export default function Home() {
               ))}
               <tr>
                 <td className="py-7" />
-                {products.map((p) => (
+                {renderable.map((p) => (
                   <td key={p.slug} className="py-7 pr-8">
                     <Link className="btn-ink" href={`/products/${p.slug}`}>View {p.nameLead.split(" ").pop()}</Link>
                   </td>

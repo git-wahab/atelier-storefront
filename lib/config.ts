@@ -16,6 +16,22 @@ export const prices: Record<string, number> = {
 /** Flat delivery charge. Set to 0 for free delivery. */
 export const shippingFlat = 0;
 
+/**
+ * Tax rate in basis points: 850 is 8.5%, matching the API's `taxRateBp`.
+ *
+ * The API computes tax on the DISCOUNTED subtotal and does not tax delivery:
+ *
+ *     taxable = subtotal - discount
+ *     tax     = round(taxable * taxRateBp / 10000)
+ *     total   = taxable + tax + shipping
+ *
+ * The storefront must not charge from this figure. `POST /orders` returns the
+ * authoritative amounts and the order keeps them forever, so changing the rate
+ * tomorrow cannot rewrite what somebody already paid. This constant exists for
+ * copy and for tests, not for arithmetic the customer is billed on.
+ */
+export const taxRateBp = 850;
+
 export const sizes = ["XS", "S", "M", "L", "XL"];
 
 export const notes = {
@@ -39,6 +55,17 @@ export const contact = {
 
 export function money(amount: number): string {
   return currency + amount.toFixed(2);
+}
+
+/**
+ * Formats the integer minor units the API deals in: 12000 becomes "$120.00".
+ *
+ * Every figure that comes back from the API goes through this one, and the
+ * whole-unit `prices` map above goes through `money`. Keeping the two apart is
+ * what stops a minor-unit figure rendering a hundred times too large.
+ */
+export function moneyMinor(minor: number): string {
+  return money(minor / 100);
 }
 
 export function priceOf(slug: string): number {

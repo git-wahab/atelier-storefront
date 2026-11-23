@@ -1,5 +1,6 @@
 import { act, render, renderHook, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { MAX_CART_LINES, MAX_LINE_QTY } from "@/lib/api";
 import { CartProvider, useCart, type CartItem } from "@/lib/cart";
 
 const KEY = "luxCart";
@@ -179,6 +180,78 @@ describe("setQty", () => {
     act(() => result.current.add("midnight-bloom", "M"));
     act(() => result.current.setQty("midnight-bloom", "M", 2.5));
     expect(result.current.items[0].qty).toBe(2.5);
+  });
+});
+
+// `POST /cart/reconcile` and `POST /orders` both take 1-20 lines with a
+// quantity of 1-10, and answer 422 outside that. The cart refuses here so the
+// shopper is never told at the end of checkout.
+describe("the API's limits", () => {
+  function fullCart(): CartItem[] {
+    return Array.from({ length: MAX_CART_LINES }, (_, n) => ({
+      slug: `design-${n}`,
+      size: "M",
+      qty: 1,
+    }));
+  }
+
+  it("says so when a line was added", () => {
+    const { result } = mount();
+    let outcome: string | undefined;
+    act(() => {
+      outcome = result.current.add("midnight-bloom", "M");
+    });
+    expect(outcome).toBe("added");
+  });
+
+  it("stops a line at the maximum quantity", () => {
+    const { result } = mount();
+    act(() => result.current.add("midnight-bloom", "M"));
+    for (let n = 0; n < MAX_LINE_QTY + 5; n++) {
+      act(() => result.current.add("midnight-bloom", "M"));
+    }
+    expect(result.current.items[0].qty).toBe(MAX_LINE_QTY);
+  });
+
+  it("reports a line that is already at the maximum", () => {
+    seed([{ slug: "midnight-bloom", size: "M", qty: MAX_LINE_QTY }]);
+    const { result } = mount();
+    let outcome: string | undefined;
+    act(() => {
+      outcome = result.current.add("midnight-bloom", "M");
+    });
+    expect(outcome).toBe("max");
+    expect(result.current.items[0].qty).toBe(MAX_LINE_QTY);
+  });
+
+  it("refuses a new line once the cart holds as many as an order can", () => {
+    seed(fullCart());
+    const { result } = mount();
+    let outcome: string | undefined;
+    act(() => {
+      outcome = result.current.add("midnight-bloom", "M");
+    });
+    expect(outcome).toBe("full");
+    expect(result.current.items).toHaveLength(MAX_CART_LINES);
+  });
+
+  it("still adds to an existing line when the cart is full", () => {
+    seed(fullCart());
+    const { result } = mount();
+    let outcome: string | undefined;
+    act(() => {
+      outcome = result.current.add("design-0", "M");
+    });
+    expect(outcome).toBe("added");
+    expect(result.current.items).toHaveLength(MAX_CART_LINES);
+    expect(result.current.items[0].qty).toBe(2);
+  });
+
+  it("clamps setQty to the maximum as well as the minimum", () => {
+    const { result } = mount();
+    act(() => result.current.add("midnight-bloom", "M"));
+    act(() => result.current.setQty("midnight-bloom", "M", 99));
+    expect(result.current.items[0].qty).toBe(MAX_LINE_QTY);
   });
 });
 

@@ -38,10 +38,12 @@ describe("with a flat delivery charge configured", () => {
     expect(value("Delivery")).toBe(money(7.5));
   });
 
-  it("adds the charge to the total once, not per item", () => {
+  it("charges the rate once per order, not per item", () => {
     const value = setup(2);
-    const subtotal = 2 * priceOf(crane.slug);
-    expect(value("2 items")).toBe(money(subtotal));
-    expect(value("Total")).toBe(money(subtotal + 7.5));
+    expect(value("2 items")).toBe(money(2 * priceOf(crane.slug)));
+    expect(value("Delivery")).toBe(money(7.5));
+    // No total: the API prices the order and applies tax, so the cart cannot
+    // name the final figure without risking disagreeing with the charge.
+    expect(value("Total")).toBe("Calculated at checkout");
   });
 });

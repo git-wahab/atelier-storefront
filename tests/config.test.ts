@@ -4,6 +4,7 @@ import {
   contact,
   currency,
   money,
+  moneyMinor,
   notes,
   priceOf,
   prices,
@@ -137,6 +138,34 @@ describe("store settings", () => {
   it("defines every contact field the footer and help page read", () => {
     for (const key of ["email", "instagram", "otherSocial", "hours", "responseTime"] as const) {
       expect(contact[key].trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
+// The API deals only in integer minor units, the local `prices` map in whole
+// ones. Two formatters keep the boundary visible; one would silently render a
+// minor-unit figure a hundred times too large.
+describe("moneyMinor", () => {
+  it("formats minor units as the shop's currency", () => {
+    expect(moneyMinor(12000)).toBe(money(120));
+  });
+
+  it("keeps the fractional part", () => {
+    expect(moneyMinor(35654)).toBe(money(356.54));
+    expect(moneyMinor(500)).toBe(money(5));
+  });
+
+  it("formats zero rather than an empty string", () => {
+    expect(moneyMinor(0)).toBe(money(0));
+  });
+
+  it("formats a single minor unit", () => {
+    expect(moneyMinor(1)).toBe(money(0.01));
+  });
+
+  it("agrees with money for every whole-unit price in the shop", () => {
+    for (const slug of Object.keys(prices)) {
+      expect(moneyMinor(Math.round(priceOf(slug) * 100)), slug).toBe(money(priceOf(slug)));
     }
   });
 });
